@@ -361,14 +361,15 @@ contract HSTradingVault is ERC20Upgradeable, ERC4626Upgradeable, OwnableUpgradea
     require(price > 0, "HS_TOKEN_PRICE_0");
   }
 
-  function withdrawEpochsTimelock() public view returns (uint256) {
-    uint256 collatP = collateralizationP();
-    uint256 overCollatP = (collatP - MathUpgradeable.min(collatP, 100 * PRECISION));
-
-    return
-      overCollatP > withdrawLockThresholdsP[1] ? WITHDRAW_EPOCHS_LOCKS[2] : overCollatP > withdrawLockThresholdsP[0]
-        ? WITHDRAW_EPOCHS_LOCKS[1]
-        : WITHDRAW_EPOCHS_LOCKS[0];
+  function withdrawEpochsTimelock() public pure returns (uint256) {
+    //fixed for distributing token credit
+    return 5;
+    // uint256 collatP = collateralizationP();
+    // uint256 overCollatP = (collatP - MathUpgradeable.min(collatP, 100 * PRECISION));
+    // return
+    //   overCollatP > withdrawLockThresholdsP[1] ? WITHDRAW_EPOCHS_LOCKS[2] : overCollatP > withdrawLockThresholdsP[0]
+    //     ? WITHDRAW_EPOCHS_LOCKS[1]
+    //     : WITHDRAW_EPOCHS_LOCKS[0];
   }
 
   function lockDiscountP(uint256 collatP, uint256 lockDuration) public view returns (uint256) {
@@ -381,7 +382,7 @@ contract HSTradingVault is ERC20Upgradeable, ERC4626Upgradeable, OwnableUpgradea
   }
 
   function totalSharesBeingWithdrawn(address owner) public view returns (uint256 shares) {
-    for (uint256 i = currentEpoch; i <= currentEpoch + WITHDRAW_EPOCHS_LOCKS[0]; i++) {
+    for (uint256 i = currentEpoch; i <= currentEpoch + withdrawEpochsTimelock(); i++) {
       shares += withdrawRequests[owner][i];
     }
   }
@@ -430,6 +431,9 @@ contract HSTradingVault is ERC20Upgradeable, ERC4626Upgradeable, OwnableUpgradea
     address sender = _msgSender();
     require(totalSharesBeingWithdrawn(sender) <= balanceOf(sender) - amount, "PENDING_WITHDRAWAL");
     _transfer(sender, to, amount);
+    if (address(tokenCredit) != address(0)) {
+      tokenCredit.notifyBalanceChange(sender, to);
+    }
     return true;
   }
 
@@ -437,6 +441,9 @@ contract HSTradingVault is ERC20Upgradeable, ERC4626Upgradeable, OwnableUpgradea
     require(totalSharesBeingWithdrawn(from) <= balanceOf(from) - amount, "PENDING_WITHDRAWAL");
     _spendAllowance(from, _msgSender(), amount);
     _transfer(from, to, amount);
+    if (address(tokenCredit) != address(0)) {
+      tokenCredit.notifyBalanceChange(from, to);
+    }
     return true;
   }
 
@@ -488,13 +495,12 @@ contract HSTradingVault is ERC20Upgradeable, ERC4626Upgradeable, OwnableUpgradea
   // Override ERC-4626 interactions (call scaleVariables on every deposit / withdrawal)
   function deposit(uint256 assets, address receiver) public override checks(assets, false) returns (uint256) {
     require(assets <= maxDeposit(receiver), "ERC4626: deposit more than max");
-
     uint256 shares = previewDeposit(assets);
     scaleVariables(shares, assets, true);
 
     _deposit(_msgSender(), receiver, assets, shares);
     if (address(tokenCredit) != address(0)) {
-      tokenCredit.contributeToken(assets, receiver);
+      tokenCredit.notifyBalanceChange(_msgSender(), address(0));
     }
     return shares;
   }
@@ -520,13 +526,15 @@ contract HSTradingVault is ERC20Upgradeable, ERC4626Upgradeable, OwnableUpgradea
     require(shares <= maxRedeem(owner), "ERC4626: redeem more than max");
 
     withdrawRequests[owner][currentEpoch] -= shares;
-    if (address(tokenCredit) != address(0)) {
-      tokenCredit.distributeExactlyReward(_msgSender(), shares);
-    }
+
     uint256 assets = previewRedeem(shares);
     scaleVariables(shares, assets, false);
 
     _withdraw(_msgSender(), receiver, owner, assets, shares);
+
+    if (address(tokenCredit) != address(0)) {
+      tokenCredit.notifyBalanceChange(_msgSender(), address(0));
+    }
     emit Redeemed(receiver, assets, currentEpoch);
     return assets;
   }
